@@ -1,6 +1,7 @@
 import React, { Component } from 'react';
 import { 
   View,
+  SafeAreaView,
   Text,
   ImageBackground,
   StyleSheet,
@@ -13,12 +14,18 @@ import {
 
 import AsyncStorage from '@react-native-community/async-storage';
 import Icon from 'react-native-vector-icons/FontAwesome';
+import axios from 'axios';
 
 import moment from 'moment';
 import 'moment/locale/pt-br';
 
+import todayImage from '../../assets/images/today.jpg';
+import tomorrowImage from '../../assets/images/tomorrow.jpg';
+import weekImage from '../../assets/images/week.jpg';
+import monthImage from '../../assets/images/month.jpg';
+
+import { server, showError } from '../common';
 import commonStyles from '../commonStyles';
-import todayImage from '../../assets/imgs/today.jpg';
 import Task from '../components/Task';
 import AddTask from './AddTask';
 
@@ -36,8 +43,24 @@ export default class TaskList extends Component {
 
   componentDidMount = async () => {
     const stateString = await AsyncStorage.getItem('taskState');
-    const state = JSON.parse(stateString) || initialState;
-    this.setState(state, this.filterTasks);
+    const savedState = JSON.parse(stateString) || initialState;
+    this.setState({
+      showDoneTasks: savedState.showDoneTasks,
+    }, this.filterTasks);
+
+    this.loadTasks();
+  }
+
+  loadTasks = async () => {
+    try {
+      const maxDate = moment()
+        .add({ days: this.props.daysAhead })
+        .format('YYYY-MM-DD 23:59:59');
+      const res = await axios.get(`${server}/tasks?date=${maxDate}`);
+      this.setState({ tasks: res.data }, this.filterTasks);
+    } catch (e) {
+      showError(e);
+    } 
   }
 
   toggleFilter = () => {
@@ -54,41 +77,63 @@ export default class TaskList extends Component {
     }
 
     this.setState({ visibleTasks });
-    AsyncStorage.setItem('taskState', JSON.stringify(this.state));
+    AsyncStorage.setItem('taskState', JSON.stringify({
+      showDoneTasks: this.state.showAddTask,
+    }))
   }
 
-  toggleTask = taskId => {
-    const tasks = [...this.state.tasks];
-    tasks.forEach(task => {
-      if (task.id === taskId) {
-        task.doneAt = task.doneAt ? null : new Date();
-      }
-    });
-
-    this.setState({ tasks }, this.filterTasks);
+  toggleTask = async taskId => {
+    try {
+      await axios.put(`${server}/tasks/${taskId}/toggle`);
+      this.loadTasks();
+    } catch (e) {
+      showError(e);
+    }
   }
 
-  addTask = newTask => {
+  addTask = async newTask => {
     if (!newTask.desc || !newTask.desc.trim()) {
       Alert.alert('Dados Inválidos', 'Descrição não informada!');
       return;
     }
 
-    const tasks = [...this.state.tasks];
-    tasks.push({
-      id: Math.random(),
-      desc: newTask.desc,
-      estimateAt: newTask.date,
-      doneAt: null,
-    });
+    try {
+      await axios.post(`${server}/tasks`, {
+        desc: newTask.desc,
+        estimateAt: newTask.date,
+      });
 
-    this.setState({ tasks, showAddTask: false }, this.filterTasks);
+      this.setState({ showAddTask: false }, this.loadTasks);
+    } catch (e) {
+      showError(e);
+    }
   }
 
-  deleteTask = id => {
-    const tasks = this.state.tasks.filter(task => task.id !== id);
-    this.setState({ tasks }, this.filterTasks);
-    Alert.alert('', 'Tarefa excluída com sucesso!') //({[BETA]})
+  deleteTask = async taskId => {
+    try {
+      await axios.delete(`${server}/tasks/${taskId}`);
+      Alert.alert('', 'Tarefa excluída com sucesso!') //({[BETA]})
+      this.loadTasks();
+    } catch (e) {
+      showError(e);
+    }
+  }
+
+  getImage = () => {
+    switch (this.props.daysAhead) {
+      case 0: return todayImage;
+      case 1: return tomorrowImage;
+      case 7: return weekImage;
+      default: return monthImage;
+    }
+  }
+  getColor = () => {
+    switch (this.props.daysAhead) {
+      case 0: return commonStyles.colors.today;
+      case 1: return commonStyles.colors.tomorrow;
+      case 7: return commonStyles.colors.week;
+      default: return commonStyles.colors.month;
+    }
   }
 
   render() {
@@ -96,14 +141,21 @@ export default class TaskList extends Component {
 
     return (
       <View style={styles.container}>
-        <StatusBar barStyle="light-content" backgroundColor="#222" />
+        <StatusBar barStyle="light-content" backgroundColor="#000" />
         <AddTask 
         isVisible={this.state.showAddTask} 
         onCancel={() => this.setState({ showAddTask: false })} 
         onSave={this.addTask}
         />
-        <ImageBackground style={styles.backgroundImage} source={todayImage}>
-          <View style={styles.iconBar }>
+        <ImageBackground style={styles.backgroundImage} source={this.getImage()}>
+          <SafeAreaView style={styles.iconBar }>
+            <TouchableOpacity onPress={() => this.props.navigation.openDrawer()}>
+              <Icon 
+              name="bars" 
+              size={25} 
+              color={commonStyles.colors.secondary}
+              />
+            </TouchableOpacity>
             <TouchableOpacity onPress={this.toggleFilter}>
               <Icon 
               name={this.state.showDoneTasks ? 'eye' : 'eye-slash'} 
@@ -111,10 +163,10 @@ export default class TaskList extends Component {
               color={commonStyles.colors.secondary}
               />
             </TouchableOpacity>
-          </View>
+          </SafeAreaView>
 
           <View style={styles.titleBar}>
-            <Text style={styles.title}>Hoje</Text>
+            <Text style={styles.title}>{this.props.title}</Text>
             <Text style={styles.subTitle}>{today}</Text>
           </View>
 
@@ -130,7 +182,7 @@ export default class TaskList extends Component {
           />
         </View>
         <TouchableOpacity 
-        style={styles.addButtonTask} 
+        style={[styles.addButtonTask, { backgroundColor: this.getColor() }]} 
         onPress={() => this.setState({ showAddTask: true })}
         activeOpacity={0.7}
         >
@@ -171,7 +223,7 @@ const styles = StyleSheet.create({
   },
   iconBar: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
     marginHorizontal: 20,
     marginTop: Platform.OS == 'ios' ? 40 : 15
   },
@@ -182,7 +234,6 @@ const styles = StyleSheet.create({
     width: 50,
     height: 50,
     borderRadius: 25,
-    backgroundColor: commonStyles.colors.today,
     justifyContent: 'center',
     alignItems: 'center',
   },
